@@ -201,7 +201,7 @@ const [monthlyData, setMonthlyData] = useLocalStorageJSON<Record<string, number>
   const sampleScorecardData = [
     {
       weekNumber: 1,
-      weekOf: '2025-01-01',
+      weekOf: '2025-01-06',
       showRateDr: 0.80,
       showRateHyg: 0.529,
       utilizationDr: null,
@@ -219,11 +219,11 @@ const [monthlyData, setMonthlyData] = useLocalStorageJSON<Record<string, number>
       referralRate: null,
       fiveStarReviews: 0,
       extraCareRedos: 0,
-      notes: 'Clinic is open for two days'
+      notes: 'Week starting Monday, January 6, 2025'
     },
     {
       weekNumber: 2,
-      weekOf: '2025-01-06',
+      weekOf: '2025-01-13',
       showRateDr: 0.75,
       showRateHyg: 0.457,
       utilizationDr: null,
@@ -241,7 +241,7 @@ const [monthlyData, setMonthlyData] = useLocalStorageJSON<Record<string, number>
       referralRate: null,
       fiveStarReviews: 0,
       extraCareRedos: 0,
-      notes: 'No hygienist on 01/07/2025'
+      notes: 'Week starting Monday, January 13, 2025'
     }
   ];
 
