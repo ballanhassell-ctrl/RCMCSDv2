@@ -21,6 +21,17 @@ const CourtStreetRCM = () => {
   const [editingItem, setEditingItem] = useState(null);
   const [formData, setFormData] = useState({});
   const [eodReportText, setEodReportText] = useState('');
+  const [mtdSupabase, setMtdSupabase] = useState<{
+    production: number | null;
+    collections: number | null;
+    newPatients: number | null;
+    asOfDate: string | null;
+    loading: boolean;
+    error: string | null;
+  }>({ production: null, collections: null, newPatients: null, asOfDate: null, loading: false, error: null });
+
+  const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
+  const SUPABASE_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string | undefined;
 
   const csdGold = '#B8985F';
 
@@ -351,25 +362,89 @@ const [monthlyData, setMonthlyData] = useLocalStorageJSON<Record<string, number>
     .filter(c => c.dateOfService && c.dateOfService.startsWith(mtdYearMonth))
     .reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
 
+  const fetchMTDFromSupabase = async () => {
+    if (!SUPABASE_URL || !SUPABASE_KEY) {
+      setMtdSupabase(prev => ({ ...prev, error: 'Supabase credentials not configured (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).' }));
+      return;
+    }
+    setMtdSupabase(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      const today = new Date();
+      const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+      const headers: Record<string, string> = {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+      };
+      const base = `${SUPABASE_URL}/rest/v1/csd_metric_values`;
+      const qs = (key: string) =>
+        `${base}?field_key=eq.${key}&as_of_date=gte.${monthStart}&select=value,as_of_date&order=as_of_date.desc&limit=1`;
+
+      const [prodRes, colRes, ptRes] = await Promise.all([
+        fetch(qs('eod_mtd_production'), { headers }),
+        fetch(qs('eod_mtd_collected'), { headers }),
+        fetch(qs('eod_mtd_new_patients'), { headers }),
+      ]);
+
+      if (!prodRes.ok || !colRes.ok || !ptRes.ok) throw new Error('Supabase request failed');
+
+      const [prod, col, pt] = await Promise.all([prodRes.json(), colRes.json(), ptRes.json()]);
+
+      setMtdSupabase({
+        production: prod[0]?.value ?? null,
+        collections: col[0]?.value ?? null,
+        newPatients: pt[0]?.value ?? null,
+        asOfDate: prod[0]?.as_of_date ?? col[0]?.as_of_date ?? null,
+        loading: false,
+        error: null,
+      });
+    } catch (err: any) {
+      setMtdSupabase(prev => ({ ...prev, loading: false, error: 'Failed to load MTD data from Supabase.' }));
+    }
+  };
+
+  useEffect(() => { fetchMTDFromSupabase(); }, []);
+
   const generateEODReport = () => {
     const today = new Date();
     const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     const monthName = today.toLocaleString('default', { month: 'long', year: 'numeric' });
     const completedTasks = dailyTasks.filter(t => t.completed).map(t => `✅ ${t.task}`).join('\n');
     const incompleteTasks = dailyTasks.filter(t => !t.completed).map(t => `⬜ ${t.task}`).join('\n');
+
+    // Prefer Supabase values; fall back to locally-calculated values
+    const prodVal = mtdSupabase.production ?? mtdProduction;
+    const colVal = mtdSupabase.collections ?? mtdCollections;
+    const ptVal = mtdSupabase.newPatients;
+    const asOf = mtdSupabase.asOfDate
+      ? new Date(mtdSupabase.asOfDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      : today.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+    const fmt = (n: number | null) =>
+      n !== null ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A';
+
     const report = `COURT STREET DENTAL — END OF DAY REPORT
 Date: ${dateStr}
 
-📊 MONTH-TO-DATE SUMMARY (${monthName})
-MTD Production:   $${mtdProduction.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-MTD Collections:  $${mtdCollections.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+📊 MONTH-TO-DATE SUMMARY (${monthName} — as of ${asOf})
+MTD Production:    ${fmt(prodVal)}
+MTD Collections:   ${fmt(colVal)}${ptVal !== null ? `\nMTD New Patients:  ${ptVal}` : ''}
 
 ✅ COMPLETED DAILY TASKS
 ${completedTasks || '(No tasks completed)'}
 
 ⬜ PENDING TASKS
 ${incompleteTasks || '(All tasks completed!)'}`;
+
     setEodReportText(report);
+  };
+
+  const sendEODEmail = () => {
+    const today = new Date();
+    const dateStr = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    const subject = encodeURIComponent(`Court Street Dental — EOD Report ${dateStr}`);
+    const body = encodeURIComponent(eodReportText || '(Generate the report first)');
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
   };
 
   // Calculate YTD and trends from historical data
@@ -2124,7 +2199,87 @@ ${incompleteTasks || '(All tasks completed!)'}`;
       {/* EOD Report Generator */}
       <div className="bg-white rounded-lg shadow p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-800">End of Day Report</h3>
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">End of Day Report</h3>
+            {mtdSupabase.asOfDate && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                Supabase data as of{' '}
+                {new Date(mtdSupabase.asOfDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={fetchMTDFromSupabase}
+            disabled={mtdSupabase.loading}
+            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            {mtdSupabase.loading ? 'Refreshing…' : '↻ Refresh'}
+          </button>
+        </div>
+
+        {/* Error banner */}
+        {mtdSupabase.error && (
+          <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            {mtdSupabase.error}
+          </div>
+        )}
+
+        {/* MTD Summary Cards — sourced from Supabase */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-6 text-white shadow-lg">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-green-100 text-sm">MTD Production</span>
+              <TrendingUp className="w-5 h-5 text-green-200" />
+            </div>
+            <div className="text-3xl font-bold">
+              {mtdSupabase.loading
+                ? '…'
+                : mtdSupabase.production !== null
+                  ? `$${Number(mtdSupabase.production).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : '—'}
+            </div>
+            <div className="text-green-100 text-xs mt-2">
+              {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white shadow-lg">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-blue-100 text-sm">MTD Collections</span>
+              <DollarSign className="w-5 h-5 text-blue-200" />
+            </div>
+            <div className="text-3xl font-bold">
+              {mtdSupabase.loading
+                ? '…'
+                : mtdSupabase.collections !== null
+                  ? `$${Number(mtdSupabase.collections).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : '—'}
+            </div>
+            <div className="text-blue-100 text-xs mt-2">
+              {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg p-6 text-white shadow-lg">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-purple-100 text-sm">MTD New Patients</span>
+              <Users className="w-5 h-5 text-purple-200" />
+            </div>
+            <div className="text-3xl font-bold">
+              {mtdSupabase.loading
+                ? '…'
+                : mtdSupabase.newPatients !== null
+                  ? mtdSupabase.newPatients
+                  : '—'}
+            </div>
+            <div className="text-purple-100 text-xs mt-2">
+              {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
+            </div>
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="flex flex-wrap gap-3 mb-4">
           <button
             onClick={generateEODReport}
             className="px-4 py-2 text-white rounded-lg font-medium text-sm"
@@ -2132,54 +2287,31 @@ ${incompleteTasks || '(All tasks completed!)'}`;
           >
             Generate Report
           </button>
-        </div>
-
-        {/* MTD Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white shadow-lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-blue-100 text-sm">MTD Collections</span>
-              <DollarSign className="w-5 h-5 text-blue-200" />
-            </div>
-            <div className="text-3xl font-bold">
-              ${mtdCollections.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            <div className="text-blue-100 text-xs mt-2">
-              {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
-            </div>
-          </div>
-          <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-6 text-white shadow-lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-green-100 text-sm">MTD Production</span>
-              <TrendingUp className="w-5 h-5 text-green-200" />
-            </div>
-            <div className="text-3xl font-bold">
-              ${mtdProduction.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            <div className="text-green-100 text-xs mt-2">
-              {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
-            </div>
-          </div>
+          {eodReportText && (
+            <>
+              <button
+                onClick={() => navigator.clipboard.writeText(eodReportText)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium text-sm transition-colors"
+              >
+                Copy to Clipboard
+              </button>
+              <button
+                onClick={sendEODEmail}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors"
+              >
+                Send via Email
+              </button>
+            </>
+          )}
         </div>
 
         {/* Generated Report Text */}
         {eodReportText && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-700">Report Preview</span>
-              <button
-                onClick={() => navigator.clipboard.writeText(eodReportText)}
-                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-xs font-medium transition-colors"
-              >
-                Copy to Clipboard
-              </button>
-            </div>
-            <textarea
-              readOnly
-              value={eodReportText}
-              className="w-full h-64 px-3 py-2 border rounded-lg text-sm font-mono text-gray-700 bg-gray-50 resize-none"
-            />
-          </div>
+          <textarea
+            readOnly
+            value={eodReportText}
+            className="w-full h-72 px-3 py-2 border rounded-lg text-sm font-mono text-gray-700 bg-gray-50 resize-none"
+          />
         )}
       </div>
     </div>
