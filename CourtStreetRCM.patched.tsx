@@ -20,7 +20,8 @@ const CourtStreetRCM = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [editingItem, setEditingItem] = useState(null);
   const [formData, setFormData] = useState({});
-  
+  const [eodReportText, setEodReportText] = useState('');
+
   const csdGold = '#B8985F';
 
   // Historical monthly data for trend analysis
@@ -336,6 +337,41 @@ const [monthlyData, setMonthlyData] = useLocalStorageJSON<Record<string, number>
 
   const kpis = calculateKPIs();
 
+  // MTD calculations — use string prefix comparison to avoid timezone issues
+  // (new Date("YYYY-MM-DD") parses as UTC midnight, causing getMonth() to return
+  //  the wrong month in negative-offset timezones for dates on the 1st of the month)
+  const now = new Date();
+  const mtdYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  const mtdCollections = payments
+    .filter(p => p.date && p.date.startsWith(mtdYearMonth))
+    .reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+
+  const mtdProduction = claims
+    .filter(c => c.dateOfService && c.dateOfService.startsWith(mtdYearMonth))
+    .reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
+
+  const generateEODReport = () => {
+    const today = new Date();
+    const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const monthName = today.toLocaleString('default', { month: 'long', year: 'numeric' });
+    const completedTasks = dailyTasks.filter(t => t.completed).map(t => `✅ ${t.task}`).join('\n');
+    const incompleteTasks = dailyTasks.filter(t => !t.completed).map(t => `⬜ ${t.task}`).join('\n');
+    const report = `COURT STREET DENTAL — END OF DAY REPORT
+Date: ${dateStr}
+
+📊 MONTH-TO-DATE SUMMARY (${monthName})
+MTD Production:   $${mtdProduction.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+MTD Collections:  $${mtdCollections.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+
+✅ COMPLETED DAILY TASKS
+${completedTasks || '(No tasks completed)'}
+
+⬜ PENDING TASKS
+${incompleteTasks || '(All tasks completed!)'}`;
+    setEodReportText(report);
+  };
+
   // Calculate YTD and trends from historical data
   const ytdCollections = useMemo(() => {
     return Object.values(monthlyData).reduce((sum, val) => sum + val, 0);
@@ -559,11 +595,11 @@ const [monthlyData, setMonthlyData] = useLocalStorageJSON<Record<string, number>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white shadow-lg">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-blue-100 text-sm">Monthly Collections</span>
+            <span className="text-blue-100 text-sm">MTD Collections</span>
             <DollarSign className="w-5 h-5 text-blue-200" />
           </div>
-          <div className="text-3xl font-bold">${kpis.totalPayments.toLocaleString()}</div>
-          <div className="text-blue-100 text-xs mt-2">November 2025</div>
+          <div className="text-3xl font-bold">${mtdCollections.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div className="text-blue-100 text-xs mt-2">{new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}</div>
         </div>
         
         <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-6 text-white shadow-lg">
@@ -1102,12 +1138,8 @@ const [monthlyData, setMonthlyData] = useLocalStorageJSON<Record<string, number>
     );
 
     const totalPayments = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
-    const thisMonth = new Date().getMonth();
-    const thisYear = new Date().getFullYear();
-    const thisMonthPayments = payments.filter(p => {
-      const date = new Date(p.date);
-      return date.getMonth() === thisMonth && date.getFullYear() === thisYear;
-    }).reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    // Use shared mtdCollections (string-based date comparison avoids timezone issues)
+    const thisMonthPayments = mtdCollections;
 
     return (
       <div className="space-y-6">
@@ -2087,6 +2119,68 @@ const [monthlyData, setMonthlyData] = useLocalStorageJSON<Record<string, number>
             </div>
           ))}
         </div>
+      </div>
+
+      {/* EOD Report Generator */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-800">End of Day Report</h3>
+          <button
+            onClick={generateEODReport}
+            className="px-4 py-2 text-white rounded-lg font-medium text-sm"
+            style={{ backgroundColor: csdGold }}
+          >
+            Generate Report
+          </button>
+        </div>
+
+        {/* MTD Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white shadow-lg">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-blue-100 text-sm">MTD Collections</span>
+              <DollarSign className="w-5 h-5 text-blue-200" />
+            </div>
+            <div className="text-3xl font-bold">
+              ${mtdCollections.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="text-blue-100 text-xs mt-2">
+              {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
+            </div>
+          </div>
+          <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-6 text-white shadow-lg">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-green-100 text-sm">MTD Production</span>
+              <TrendingUp className="w-5 h-5 text-green-200" />
+            </div>
+            <div className="text-3xl font-bold">
+              ${mtdProduction.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="text-green-100 text-xs mt-2">
+              {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
+            </div>
+          </div>
+        </div>
+
+        {/* Generated Report Text */}
+        {eodReportText && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-gray-700">Report Preview</span>
+              <button
+                onClick={() => navigator.clipboard.writeText(eodReportText)}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-xs font-medium transition-colors"
+              >
+                Copy to Clipboard
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={eodReportText}
+              className="w-full h-64 px-3 py-2 border rounded-lg text-sm font-mono text-gray-700 bg-gray-50 resize-none"
+            />
+          </div>
+        )}
       </div>
     </div>
   );
